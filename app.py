@@ -2,7 +2,6 @@ import os
 import re
 import ssl
 import csv
-import base64
 import mimetypes
 import smtplib
 from io import BytesIO
@@ -12,7 +11,6 @@ from email.message import EmailMessage
 from flask import Flask, request, render_template_string, send_file, jsonify, url_for
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
-from reportlab.lib.utils import ImageReader
 import qrcode
 from werkzeug.utils import secure_filename
 
@@ -47,36 +45,75 @@ TERMS_URL = "https://www.safestreets.com/terms-conditions/"
 PRIVACY_URL = "https://www.safestreets.com/privacy-policy/"
 DO_NOT_SELL_URL = "https://www.safestreets.com/affirmation/"
 
-CONSENT_VERSION = "solar-consultation-agreement-v12"
-
-# Exact filenames in static/
-# If your actual filename spelling is different, update it here.
-LOGO_FILENAME = "SafetreetsLogo.png"
-FIVE_STAR_FILENAME = "Safestreets5Star.png"
-SHIELD_FILENAME = "shield.png"
-BACKGROUND_FILENAME = "background.jpg"
+CONSENT_VERSION = "solar-consultation-request-v3"
 
 # -------------------------------------------------
-# STATIC HELPERS
+# FILE NAME CANDIDATES
 # -------------------------------------------------
+LOGO_CANDIDATES = [
+    "SafeStreetsLogo.png",
+    "SafetreetsLogo.png",
+    "logo.png",
+]
+
+FIVE_STAR_CANDIDATES = [
+    "Safestreets5Star.png",
+    "SafeStreets5Star.png",
+]
+
+SHIELD_CANDIDATES = [
+    "shield.png",
+]
+
+BACKGROUND_CANDIDATES = [
+    "background.jpg",
+    "background.png",
+]
+
+# -------------------------------------------------
+# FILE HELPERS
+# -------------------------------------------------
+def first_existing_filename(candidates):
+    for name in candidates:
+        full_path = os.path.join(STATIC_FOLDER, name)
+        if os.path.exists(full_path):
+            return name
+    return None
+
+def logo_filename():
+    return first_existing_filename(LOGO_CANDIDATES)
+
+def five_star_filename():
+    return first_existing_filename(FIVE_STAR_CANDIDATES)
+
+def shield_filename():
+    return first_existing_filename(SHIELD_CANDIDATES)
+
+def background_filename():
+    return first_existing_filename(BACKGROUND_CANDIDATES)
+
 def logo_exists():
-    return os.path.exists(os.path.join(STATIC_FOLDER, LOGO_FILENAME))
+    return logo_filename() is not None
 
 def five_star_exists():
-    return os.path.exists(os.path.join(STATIC_FOLDER, FIVE_STAR_FILENAME))
+    return five_star_filename() is not None
 
 def shield_exists():
-    return os.path.exists(os.path.join(STATIC_FOLDER, SHIELD_FILENAME))
+    return shield_filename() is not None
 
 def background_exists():
-    return os.path.exists(os.path.join(STATIC_FOLDER, BACKGROUND_FILENAME))
+    return background_filename() is not None
 
 def common_template_context():
     return {
         "logo_exists": logo_exists(),
+        "logo_file": logo_filename(),
         "five_star_exists": five_star_exists(),
+        "five_star_file": five_star_filename(),
         "shield_exists": shield_exists(),
+        "shield_file": shield_filename(),
         "background_exists": background_exists(),
+        "background_file": background_filename(),
     }
 
 # -------------------------------------------------
@@ -110,13 +147,13 @@ def render_state_options(selected_state=""):
 # CONSENT TEXT
 # -------------------------------------------------
 COMBINED_CONSENT_TEXT = (
-    "By signing below and submitting this form, I agree by electronic signature to receive recurring "
+    "By checking the boxes below and submitting this form, I agree to receive recurring "
     "automated marketing and other calls, texts, and prerecorded messages from SafeStreets' solar partners "
     "at the number I provide, even if I am on a Do Not Call list. I authorize SafeStreets' solar partners, "
     "their partners, and/or affiliates to contact me by telephone calls and/or text messages (SMS), using "
     "auto-dialing technology or otherwise, for advertising and marketing purposes. Consent is not required "
     "to make a purchase. Message and data rates may apply. Reply STOP to opt out of texts or HELP for help. "
-    "By signing and submitting, I also acknowledge and agree to the Terms of Use, Privacy Policy, and "
+    "By checking the boxes and submitting, I also acknowledge and agree to the Terms of Use, Privacy Policy, and "
     "Do Not Sell My Personal Information notice linked below."
 )
 
@@ -238,11 +275,8 @@ BASE_STYLES = """
 <style>
     :root {
         --ss-blue: #0b2f5b;
-        --ss-blue-2: #184d8a;
-        --ss-blue-3: #2b6cb0;
         --ss-orange: #f59e0b;
         --ss-orange-2: #d97706;
-        --ss-white: #ffffff;
         --ss-border: #d9e4f2;
         --ss-text: #152235;
         --ss-muted: #56657a;
@@ -256,17 +290,16 @@ BASE_STYLES = """
         margin: 0;
         font-family: Arial, Helvetica, sans-serif;
         color: var(--ss-text);
-        {% if background_exists %}
+        {% if background_exists and background_file %}
         background-image:
             linear-gradient(rgba(8, 19, 35, 0.55), rgba(8, 19, 35, 0.55)),
-            url('{{ url_for("static", filename="background.jpg") }}');
+            url('{{ url_for("static", filename=background_file) }}');
         background-size: cover;
         background-position: center center;
         background-repeat: no-repeat;
         background-attachment: fixed;
         {% else %}
-        background:
-            linear-gradient(180deg, #eef4fb 0%, #f8fbff 100%);
+        background: linear-gradient(180deg, #eef4fb 0%, #f8fbff 100%);
         {% endif %}
     }
 
@@ -400,6 +433,35 @@ BASE_STYLES = """
         text-decoration: underline;
     }
 
+    .ack-box {
+        margin-top: 18px;
+        padding: 18px;
+        border-radius: 16px;
+        background: rgba(249, 251, 254, 0.95);
+        border: 1px solid var(--ss-border);
+    }
+
+    .ack-item {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        margin-top: 12px;
+        line-height: 1.6;
+    }
+
+    .ack-item input[type="checkbox"] {
+        width: 20px;
+        height: 20px;
+        margin-top: 2px;
+        flex: 0 0 auto;
+    }
+
+    .ack-item label {
+        margin: 0;
+        font-weight: 400;
+        color: var(--ss-text);
+    }
+
     button {
         border: none;
         border-radius: 14px;
@@ -420,14 +482,6 @@ BASE_STYLES = """
         margin-top: 22px;
         background: linear-gradient(135deg, var(--ss-orange) 0%, var(--ss-orange-2) 100%);
         color: white;
-    }
-
-    .clear-btn {
-        width: auto;
-        min-width: 170px;
-        background: #eef3f9;
-        color: var(--ss-blue);
-        border: 1px solid var(--ss-border);
     }
 
     .grid-2 {
@@ -471,20 +525,6 @@ BASE_STYLES = """
         margin-top: 6px;
     }
 
-    .sig-wrap {
-        margin-top: 18px;
-    }
-
-    #signature-pad {
-        width: 100%;
-        height: 230px;
-        border: 2px dashed #bdd0e6;
-        background: #fff;
-        border-radius: 16px;
-        touch-action: none;
-        display: block;
-    }
-
     @media (max-width: 900px) {
         .grid-3 {
             grid-template-columns: 1fr;
@@ -509,10 +549,6 @@ BASE_STYLES = """
         .grid-3 {
             grid-template-columns: 1fr;
         }
-
-        #signature-pad {
-            height: 210px;
-        }
     }
 </style>
 """
@@ -521,10 +557,10 @@ BASE_STYLES = """
 # TEMPLATES
 # -------------------------------------------------
 HERO_BRAND = """
-{% if logo_exists %}
-    <img src="{{ url_for('static', filename='SafetreetsLogo.png') }}" alt="SafeStreets Logo" class="brand-logo">
-{% elif shield_exists %}
-    <img src="{{ url_for('static', filename='shield.png') }}" alt="SafeStreets Shield" class="brand-shield">
+{% if logo_exists and logo_file %}
+    <img src="{{ url_for('static', filename=logo_file) }}" alt="SafeStreets Logo" class="brand-logo">
+{% elif shield_exists and shield_file %}
+    <img src="{{ url_for('static', filename=shield_file) }}" alt="SafeStreets Shield" class="brand-shield">
 {% else %}
     <div class="brand-fallback">SafeStreets LLC</div>
 {% endif %}
@@ -545,7 +581,7 @@ FORM_HTML = """
                 <div class="logo-wrap">
 """ + HERO_BRAND + """
                     <h1>Solar Consultation Request</h1>
-                    <p>Please provide your information below and sign electronically to continue.</p>
+                    <p>Please provide your information below to continue.</p>
                 </div>
             </div>
 
@@ -559,7 +595,7 @@ FORM_HTML = """
                     <div class="error">{{ error }}</div>
                 {% endif %}
 
-                <form method="POST" action="/submit" enctype="multipart/form-data" onsubmit="return prepareSignature();">
+                <form method="POST" action="/submit" enctype="multipart/form-data">
 
                     <div class="grid-2">
                         <div>
@@ -633,93 +669,31 @@ FORM_HTML = """
                         </div>
                     </div>
 
-                    <div class="sig-wrap">
-                        <label>Electronic Signature</label>
-                        <p class="small">By signing below, you are agreeing to the disclosure above.</p>
-                        <canvas id="signature-pad"></canvas>
-                        <input type="hidden" name="signature_data" id="signature_data">
-                        <div style="margin-top: 12px;">
-                            <button type="button" class="clear-btn" onclick="clearSignature()">Clear Signature</button>
+                    <div class="ack-box">
+                        <strong>Customer Acknowledgment</strong>
+
+                        <div class="ack-item">
+                            <input type="checkbox" id="confirm_info" name="confirm_info" value="yes" {% if prefill.confirm_info %}checked{% endif %} required>
+                            <label for="confirm_info">
+                                By checking this box, I confirm that the information I entered above is accurate to the best of my knowledge.
+                            </label>
+                        </div>
+
+                        <div class="ack-item">
+                            <input type="checkbox" id="confirm_consent" name="confirm_consent" value="yes" {% if prefill.confirm_consent %}checked{% endif %} required>
+                            <label for="confirm_consent">
+                                By checking this box, I acknowledge and agree to the electronic consent disclosure above and authorize submission of this Solar Consultation Request.
+                            </label>
                         </div>
                     </div>
 
-                    <button type="submit" class="submit-btn">Submit Solar Consultation Agreement</button>
+                    <button type="submit" class="submit-btn">Submit Solar Consultation Request</button>
                 </form>
             </div>
         </div>
     </div>
 
     <script>
-        const canvas = document.getElementById('signature-pad');
-        const ctx = canvas.getContext('2d');
-        let drawing = false;
-        let hasSignature = false;
-
-        function setupCanvas() {
-            const rect = canvas.getBoundingClientRect();
-            const ratio = Math.max(window.devicePixelRatio || 1, 1);
-            canvas.width = rect.width * ratio;
-            canvas.height = rect.height * ratio;
-            ctx.setTransform(1, 0, 0, 1, 0, 0);
-            ctx.scale(ratio, ratio);
-            ctx.lineWidth = 2;
-            ctx.lineCap = 'round';
-            ctx.strokeStyle = '#0b2f5b';
-        }
-
-        function point(e) {
-            const rect = canvas.getBoundingClientRect();
-            if (e.touches && e.touches.length > 0) {
-                return {
-                    x: e.touches[0].clientX - rect.left,
-                    y: e.touches[0].clientY - rect.top
-                };
-            }
-            return {
-                x: e.clientX - rect.left,
-                y: e.clientY - rect.top
-            };
-        }
-
-        function startDraw(e) {
-            e.preventDefault();
-            drawing = true;
-            hasSignature = true;
-            const p = point(e);
-            ctx.beginPath();
-            ctx.moveTo(p.x, p.y);
-        }
-
-        function draw(e) {
-            if (!drawing) return;
-            e.preventDefault();
-            const p = point(e);
-            ctx.lineTo(p.x, p.y);
-            ctx.stroke();
-        }
-
-        function stopDraw(e) {
-            if (!drawing) return;
-            e.preventDefault();
-            drawing = false;
-        }
-
-        function clearSignature() {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            setupCanvas();
-            hasSignature = false;
-            document.getElementById('signature_data').value = "";
-        }
-
-        function prepareSignature() {
-            if (!hasSignature) {
-                alert("Please sign before submitting.");
-                return false;
-            }
-            document.getElementById('signature_data').value = canvas.toDataURL('image/png');
-            return true;
-        }
-
         async function loadUtilities() {
             const zip = document.getElementById('zip_code').value.trim();
             const state = document.getElementById('state').value.trim();
@@ -753,11 +727,8 @@ FORM_HTML = """
         }
 
         window.addEventListener('load', function() {
-            setupCanvas();
             loadUtilities();
         });
-
-        window.addEventListener('resize', setupCanvas);
 
         document.getElementById('zip_code').addEventListener('input', function() {
             const zip = this.value.replace(/\\D/g, '').slice(0, 5);
@@ -776,15 +747,6 @@ FORM_HTML = """
                 loadUtilities();
             }
         });
-
-        canvas.addEventListener('mousedown', startDraw);
-        canvas.addEventListener('mousemove', draw);
-        canvas.addEventListener('mouseup', stopDraw);
-        canvas.addEventListener('mouseleave', stopDraw);
-
-        canvas.addEventListener('touchstart', startDraw, { passive: false });
-        canvas.addEventListener('touchmove', draw, { passive: false });
-        canvas.addEventListener('touchend', stopDraw, { passive: false });
     </script>
 </body>
 </html>
@@ -803,21 +765,21 @@ SUCCESS_HTML = """
         <div class="container">
             <div class="hero">
                 <div class="logo-wrap">
-{% if logo_exists %}
-    <img src="{{ url_for('static', filename='SafetreetsLogo.png') }}" alt="SafeStreets Logo" class="brand-logo">
-{% elif shield_exists %}
-    <img src="{{ url_for('static', filename='shield.png') }}" alt="SafeStreets Shield" class="brand-shield">
+{% if logo_exists and logo_file %}
+    <img src="{{ url_for('static', filename=logo_file) }}" alt="SafeStreets Logo" class="brand-logo">
+{% elif shield_exists and shield_file %}
+    <img src="{{ url_for('static', filename=shield_file) }}" alt="SafeStreets Shield" class="brand-shield">
 {% else %}
     <div class="brand-fallback">SafeStreets LLC</div>
 {% endif %}
                     <h1>Thank You</h1>
-                    <p>Your Solar Consultation Agreement has been submitted.</p>
+                    <p>Your Solar Consultation Request has been submitted.</p>
                 </div>
             </div>
 
             <div class="card" style="text-align:center;">
-                {% if shield_exists %}
-                    <img src="{{ url_for('static', filename='shield.png') }}" alt="SafeStreets Shield" class="brand-shield">
+                {% if shield_exists and shield_file %}
+                    <img src="{{ url_for('static', filename=shield_file) }}" alt="SafeStreets Shield" class="brand-shield">
                 {% endif %}
                 <h2 class="section-title">Submission Received</h2>
                 <p class="section-subtitle">{{ message }}</p>
@@ -853,15 +815,6 @@ def clean_name(value: str) -> str:
     value = re.sub(r"\s+", " ", value)
     return value or "Customer"
 
-def data_url_to_bytes(data_url: str) -> bytes:
-    if "," not in data_url:
-        raise ValueError("Invalid signature data.")
-    return base64.b64decode(data_url.split(",", 1)[1])
-
-def save_signature_image(signature_data: str, path: str):
-    with open(path, "wb") as f:
-        f.write(data_url_to_bytes(signature_data))
-
 def wrap_lines(pdf, text, max_width, font_name="Helvetica", font_size=9):
     text = str(text or "").strip()
     if not text:
@@ -895,7 +848,7 @@ def draw_paragraph(pdf, text, x, y, max_width, font_name="Helvetica", font_size=
         y -= line_height
     return y
 
-def build_pdf(data: dict, pdf_path: str, signature_data: str):
+def build_pdf(data: dict, pdf_path: str):
     pdf = canvas.Canvas(pdf_path, pagesize=letter)
     width, height = letter
 
@@ -903,13 +856,12 @@ def build_pdf(data: dict, pdf_path: str, signature_data: str):
     right_margin = 60
     content_width = width - left_margin - right_margin
 
-    logo_path = os.path.join(STATIC_FOLDER, LOGO_FILENAME)
-    five_star_path = os.path.join(STATIC_FOLDER, FIVE_STAR_FILENAME)
+    current_logo = logo_filename()
+    current_five_star = five_star_filename()
 
-    # HEADER
-    if os.path.exists(logo_path):
+    if current_logo:
         pdf.drawImage(
-            logo_path,
+            os.path.join(STATIC_FOLDER, current_logo),
             left_margin - 18,
             height - 78,
             width=185,
@@ -918,9 +870,9 @@ def build_pdf(data: dict, pdf_path: str, signature_data: str):
             preserveAspectRatio=True
         )
 
-    if os.path.exists(five_star_path):
+    if current_five_star:
         pdf.drawImage(
-            five_star_path,
+            os.path.join(STATIC_FOLDER, current_five_star),
             width - right_margin - 95,
             height - 68,
             width=95,
@@ -929,16 +881,14 @@ def build_pdf(data: dict, pdf_path: str, signature_data: str):
             preserveAspectRatio=True
         )
 
-    pdf.setFillColorRGB(0, 0, 0)
     pdf.setFont("Helvetica-Bold", 12)
     pdf.drawCentredString(width / 2, height - 55, "SafeStreet LLC")
 
     pdf.setFont("Helvetica-Bold", 12)
-    pdf.drawCentredString(width / 2, height - 80, "Customer Solar Consultation Agreement")
+    pdf.drawCentredString(width / 2, height - 80, "Customer Solar Consultation Request")
 
     y = height - 120
 
-    # DETAILS
     pdf.setFont("Helvetica", 9)
     details = [
         f"Customer Name: {data.get('customer_name', '')}",
@@ -961,7 +911,6 @@ def build_pdf(data: dict, pdf_path: str, signature_data: str):
 
     y -= 26
 
-    # CONSENT
     pdf.setFont("Helvetica-Bold", 12)
     pdf.drawString(left_margin, y, "Electronic Consent")
     y -= 22
@@ -977,61 +926,28 @@ def build_pdf(data: dict, pdf_path: str, signature_data: str):
         line_height=12
     )
 
-    y -= 10
-
-    y = draw_paragraph(
-        pdf,
-        "Privacy Policy, and Do Not Sell My Personal Information notice linked below.",
-        left_margin,
-        y,
-        content_width,
-        font_name="Helvetica",
-        font_size=9,
-        line_height=12
-    )
-
-    y -= 34
-
-    # SIGNATURE
-    if y < 220:
-        pdf.showPage()
-        y = height - 80
+    y -= 20
 
     pdf.setFont("Helvetica-Bold", 12)
-    pdf.drawString(left_margin, y, "Customer Signature")
-    y -= 28
-
-    signature_png = os.path.join(TEMP_FOLDER, f"{data['base_name']}_signature.png")
-    save_signature_image(signature_data, signature_png)
-
-    # signature line
-    line_y = y - 82
-    pdf.line(left_margin, line_y, left_margin + 260, line_y)
-
-    if os.path.exists(signature_png):
-        pdf.drawImage(
-            ImageReader(signature_png),
-            left_margin + 5,
-            y - 78,
-            width=220,
-            height=55,
-            mask='auto'
-        )
-
-    y = line_y - 18
+    pdf.drawString(left_margin, y, "Customer Acknowledgment")
+    y -= 20
 
     pdf.setFont("Helvetica", 9)
-    pdf.drawString(left_margin, y, f"Signed by: {data.get('customer_name', '')}")
-    y -= 12
-    pdf.drawString(left_margin, y, f"Signature Timestamp (UTC): {data.get('submitted_at_utc', '')}")
+    pdf.drawString(left_margin, y, f"[{'X' if data.get('confirm_info') else ' '}] By checking this box, I confirm that the information entered above is accurate to the best of my knowledge.")
+    y -= 18
+    pdf.drawString(left_margin, y, f"[{'X' if data.get('confirm_consent') else ' '}] By checking this box, I acknowledge and agree to the electronic consent disclosure above and authorize submission of this Solar Consultation Request.")
+    y -= 24
 
-    pdf.setTitle(f"{data['customer_name']} - Solar Consultation Agreement")
+    pdf.drawString(left_margin, y, f"Acknowledged by: {data.get('customer_name', '')}")
+    y -= 12
+    pdf.drawString(left_margin, y, f"Acknowledgment Timestamp (UTC): {data.get('submitted_at_utc', '')}")
+
+    pdf.setTitle(f"{data['customer_name']} - Solar Consultation Request")
     pdf.setAuthor("SafeStreet LLC")
-    pdf.setSubject("Customer Solar Consultation Agreement")
+    pdf.setSubject("Customer Solar Consultation Request")
     pdf.setCreator("SafeStreets Solar Consultation Form")
 
     pdf.save()
-    return signature_png
 
 def send_email(subject: str, body: str, pdf_path: str, bill_path: str | None):
     if not os.path.exists(pdf_path):
@@ -1093,6 +1009,8 @@ def home():
         "consultation_date": "",
         "consultation_time": "",
         "utility_company_manual": "",
+        "confirm_info": False,
+        "confirm_consent": False,
     }
 
     return render_template_string(
@@ -1107,6 +1025,10 @@ def home():
         do_not_sell_url=DO_NOT_SELL_URL,
         **common_template_context()
     )
+
+@app.route("/healthz", methods=["GET"])
+def healthz():
+    return "ok", 200
 
 @app.route("/api/utilities", methods=["GET"])
 def api_utilities():
@@ -1150,10 +1072,12 @@ def submit():
     zip_code = (request.form.get("zip_code") or "").strip()
     consultation_date = (request.form.get("consultation_date") or "").strip()
     consultation_time = (request.form.get("consultation_time") or "").strip()
-    signature_data = (request.form.get("signature_data") or "").strip()
 
     selected_utility = (request.form.get("utility_company") or "").strip()
     manual_utility = (request.form.get("utility_company_manual") or "").strip()
+
+    confirm_info = request.form.get("confirm_info") == "yes"
+    confirm_consent = request.form.get("confirm_consent") == "yes"
 
     if selected_utility and selected_utility != "OTHER":
         utility_company = selected_utility
@@ -1163,7 +1087,7 @@ def submit():
     if not all([
         customer_name, phone_number, email, street_address,
         state, zip_code, utility_company, consultation_date,
-        consultation_time, signature_data
+        consultation_time, confirm_info, confirm_consent
     ]):
         prefill = {
             "customer_name": customer_name,
@@ -1175,11 +1099,13 @@ def submit():
             "consultation_date": consultation_date,
             "consultation_time": consultation_time,
             "utility_company_manual": manual_utility,
+            "confirm_info": confirm_info,
+            "confirm_consent": confirm_consent,
         }
 
         return render_template_string(
             FORM_HTML,
-            error="Please complete all required fields, choose or type a utility company, and sign before submitting.",
+            error="Please complete all required fields, choose or type a utility company, and check both boxes before submitting.",
             prefill=prefill,
             state_options_html=render_state_options(state),
             utility_options_html=build_utility_options_html(zip_code, state, selected_utility),
@@ -1207,17 +1133,18 @@ def submit():
         "submitted_at_utc": submitted_at_utc,
         "ip_address": ip_address,
         "base_name": base_name,
+        "confirm_info": confirm_info,
+        "confirm_consent": confirm_consent,
     }
 
-    pdf_filename = secure_filename(f"{clean_name(customer_name)} - Solar Consultation Agreement.pdf")
+    pdf_filename = secure_filename(f"{clean_name(customer_name)} - Solar Consultation Request.pdf")
     pdf_path = os.path.join(TEMP_FOLDER, pdf_filename)
 
     bill_path = None
-    signature_png = None
     email_sent = False
 
     try:
-        signature_png = build_pdf(data, pdf_path, signature_data)
+        build_pdf(data, pdf_path)
 
         electric_bill = request.files.get("electric_bill")
         if electric_bill and electric_bill.filename:
@@ -1226,12 +1153,11 @@ def submit():
             bill_path = os.path.join(TEMP_FOLDER, bill_filename)
             electric_bill.save(bill_path)
 
-        # Exact email body requested
-        subject = f"{customer_name} - Solar Consultation Agreement"
+        subject = f"{customer_name} - Solar Consultation Request"
         body = (
             "Solar Team,\n\n"
-            f"A new Solar Consultation Agreement has been submitted for {customer_name}.\n\n"
-            "Please find the agreement attached and add it to the customer’s account in Salesforce.\n\n"
+            f"A new Solar Consultation Request has been submitted for {customer_name}.\n\n"
+            "Please find the request attached and add it to the customer’s account in Salesforce.\n\n"
             "Let me know if you have any questions.\n\n"
             "Thank you,\n\n"
             "Gordon J. Black\n"
@@ -1245,7 +1171,7 @@ def submit():
             send_email(subject, body, pdf_path, bill_path)
             email_sent = True
 
-        message = "Your Solar Consultation Agreement has been submitted successfully. A SafeStreets Solar leader will review your request."
+        message = "Your Solar Consultation Request has been submitted successfully. A SafeStreets Solar leader will review your request."
 
     except Exception as e:
         print(f"Submission error: {e}")
@@ -1255,7 +1181,6 @@ def submit():
         if SEND_EMAIL and DELETE_LOCAL_FILES_AFTER_EMAIL and email_sent:
             safe_delete(pdf_path)
             safe_delete(bill_path)
-            safe_delete(signature_png)
             print("Temp files deleted after successful email send")
 
     return render_template_string(
