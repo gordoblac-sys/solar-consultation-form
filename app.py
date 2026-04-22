@@ -45,15 +45,19 @@ TERMS_URL = "https://www.safestreets.com/terms-conditions/"
 PRIVACY_URL = "https://www.safestreets.com/privacy-policy/"
 DO_NOT_SELL_URL = "https://www.safestreets.com/affirmation/"
 
-CONSENT_VERSION = "solar-consultation-request-v5"
+CONSENT_VERSION = "solar-consultation-request-v6"
+
+# YouTube video:
+# https://www.youtube.com/watch?v=u14P_Kytz10
+YOUTUBE_VIDEO_ID = "u14P_Kytz10"
 
 # -------------------------------------------------
 # FILE NAME CANDIDATES
 # -------------------------------------------------
 LOGO_CANDIDATES = [
+    "logo.png",
     "SafeStreetsLogo.png",
     "SafetreetsLogo.png",
-    "logo.png",
 ]
 
 FIVE_STAR_CANDIDATES = [
@@ -126,6 +130,7 @@ def common_template_context():
         "background_file": background_filename(),
         "qr_exists": qr_exists(),
         "qr_file": qr_filename(),
+        "youtube_video_id": YOUTUBE_VIDEO_ID,
     }
 
 # -------------------------------------------------
@@ -287,6 +292,7 @@ BASE_STYLES = """
 <style>
     :root {
         --ss-blue: #0b2f5b;
+        --ss-blue-2: #184d8a;
         --ss-orange: #f59e0b;
         --ss-orange-2: #d97706;
         --ss-border: #d9e4f2;
@@ -294,6 +300,8 @@ BASE_STYLES = """
         --ss-muted: #56657a;
         --ss-danger: #b42318;
         --ss-shadow: 0 12px 35px rgba(11, 47, 91, 0.22);
+        --ss-green: #15803d;
+        --ss-red: #b42318;
     }
 
     * { box-sizing: border-box; }
@@ -355,7 +363,7 @@ BASE_STYLES = """
 
     .brand-logo {
         display: block;
-        max-width: min(100%, 520px);
+        max-width: min(100%, 650px);
         width: 100%;
         height: auto;
         margin: 0 auto 14px;
@@ -474,6 +482,65 @@ BASE_STYLES = """
         color: var(--ss-text);
     }
 
+    .video-shell {
+        margin-top: 18px;
+        background: rgba(255,255,255,0.96);
+        border: 1px solid rgba(217, 228, 242, 0.9);
+        border-radius: 22px;
+        box-shadow: var(--ss-shadow);
+        padding: 18px;
+    }
+
+    .video-frame {
+        position: relative;
+        width: 100%;
+        padding-top: 56.25%;
+        border-radius: 18px;
+        overflow: hidden;
+        background: #000;
+    }
+
+    .video-frame iframe,
+    .video-frame #yt-player {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        border: 0;
+    }
+
+    .intro-buttons {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+        margin-top: 18px;
+    }
+
+    .intro-btn {
+        display: inline-block;
+        text-align: center;
+        text-decoration: none;
+        border-radius: 14px;
+        padding: 16px 18px;
+        font-size: 17px;
+        font-weight: 700;
+        transition: 0.18s ease;
+        color: white;
+    }
+
+    .intro-btn:hover {
+        transform: translateY(-1px);
+        opacity: 0.98;
+    }
+
+    .btn-green {
+        background: linear-gradient(135deg, #16a34a 0%, #15803d 100%);
+    }
+
+    .btn-red {
+        background: linear-gradient(135deg, #dc2626 0%, #b42318 100%);
+    }
+
     button {
         border: none;
         border-radius: 14px;
@@ -552,13 +619,14 @@ BASE_STYLES = """
             padding: 12px 10px 28px;
         }
 
-        .hero, .card {
+        .hero, .card, .video-shell {
             border-radius: 18px;
             padding: 18px;
         }
 
         .grid-2,
-        .grid-3 {
+        .grid-3,
+        .intro-buttons {
             grid-template-columns: 1fr;
         }
     }
@@ -576,6 +644,70 @@ HERO_BRAND = """
 {% else %}
     <div class="brand-fallback">SafeStreets LLC</div>
 {% endif %}
+"""
+
+INTRO_HTML = """
+<!doctype html>
+<html>
+<head>
+    <title>SafeStreets Solar Consultation Request</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+""" + BASE_STYLES + """
+</head>
+<body>
+    <div class="page">
+        <div class="container">
+            <div class="hero">
+                <div class="logo-wrap">
+""" + HERO_BRAND + """
+                    <h1>SafeStreets Solar</h1>
+                    <p>Please watch this short video before continuing.</p>
+                </div>
+            </div>
+
+            <div class="video-shell">
+                <div class="video-frame">
+                    <div id="yt-player"></div>
+                </div>
+
+                <div class="intro-buttons">
+                    <a href="/form" class="intro-btn btn-green">Interested</a>
+                    <a href="/not-interested" class="intro-btn btn-red">Not Interested</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://www.youtube.com/iframe_api"></script>
+    <script>
+        let player;
+
+        function onYouTubeIframeAPIReady() {
+            player = new YT.Player('yt-player', {
+                videoId: '{{ youtube_video_id }}',
+                playerVars: {
+                    autoplay: 1,
+                    controls: 1,
+                    rel: 0,
+                    playsinline: 1
+                },
+                events: {
+                    onReady: onPlayerReady
+                }
+            });
+        }
+
+        function onPlayerReady(event) {
+            try {
+                event.target.mute();
+                event.target.playVideo();
+            } catch (e) {
+                console.log('Autoplay was limited by the browser.', e);
+            }
+        }
+    </script>
+</body>
+</html>
 """
 
 FORM_HTML = """
@@ -802,6 +934,30 @@ SUCCESS_HTML = """
 </html>
 """
 
+NOT_INTERESTED_HTML = """
+<!doctype html>
+<html>
+<head>
+    <title>SafeStreets Solar</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+""" + BASE_STYLES + """
+</head>
+<body>
+    <div class="page">
+        <div class="container">
+            <div class="hero">
+                <div class="logo-wrap">
+""" + HERO_BRAND + """
+                    <h1>Thank You</h1>
+                    <p>We appreciate your time. If you change your mind later, you can always come back.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
 # -------------------------------------------------
 # PDF HELPERS
 # -------------------------------------------------
@@ -1008,7 +1164,14 @@ def safe_delete(path):
 # ROUTES
 # -------------------------------------------------
 @app.route("/", methods=["GET"])
-def home():
+def intro():
+    return render_template_string(
+        INTRO_HTML,
+        **common_template_context()
+    )
+
+@app.route("/form", methods=["GET"])
+def form_page():
     prefill = {
         "customer_name": "",
         "phone_number": "",
@@ -1033,6 +1196,13 @@ def home():
         terms_url=TERMS_URL,
         privacy_url=PRIVACY_URL,
         do_not_sell_url=DO_NOT_SELL_URL,
+        **common_template_context()
+    )
+
+@app.route("/not-interested", methods=["GET"])
+def not_interested():
+    return render_template_string(
+        NOT_INTERESTED_HTML,
         **common_template_context()
     )
 
