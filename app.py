@@ -45,7 +45,7 @@ TERMS_URL = "https://www.safestreets.com/terms-conditions/"
 PRIVACY_URL = "https://www.safestreets.com/privacy-policy/"
 DO_NOT_SELL_URL = "https://www.safestreets.com/affirmation/"
 
-CONSENT_VERSION = "solar-consultation-request-v3"
+CONSENT_VERSION = "solar-consultation-request-v4"
 
 # -------------------------------------------------
 # FILE NAME CANDIDATES
@@ -70,6 +70,11 @@ BACKGROUND_CANDIDATES = [
     "background.png",
 ]
 
+QR_CANDIDATES = [
+    "safestreets_qr.png",
+    "qr.png",
+]
+
 # -------------------------------------------------
 # FILE HELPERS
 # -------------------------------------------------
@@ -92,6 +97,9 @@ def shield_filename():
 def background_filename():
     return first_existing_filename(BACKGROUND_CANDIDATES)
 
+def qr_filename():
+    return first_existing_filename(QR_CANDIDATES)
+
 def logo_exists():
     return logo_filename() is not None
 
@@ -104,6 +112,9 @@ def shield_exists():
 def background_exists():
     return background_filename() is not None
 
+def qr_exists():
+    return qr_filename() is not None
+
 def common_template_context():
     return {
         "logo_exists": logo_exists(),
@@ -114,6 +125,8 @@ def common_template_context():
         "shield_file": shield_filename(),
         "background_exists": background_exists(),
         "background_file": background_filename(),
+        "qr_exists": qr_exists(),
+        "qr_file": qr_filename(),
     }
 
 # -------------------------------------------------
@@ -1055,6 +1068,10 @@ def api_utilities():
 
 @app.route("/qr.png", methods=["GET"])
 def qr_png():
+    current_qr = qr_filename()
+    if current_qr:
+        return send_file(os.path.join(STATIC_FOLDER, current_qr), mimetype="image/png")
+
     root = request.url_root.rstrip("/") + "/"
     img = qrcode.make(root)
     buffer = BytesIO()
