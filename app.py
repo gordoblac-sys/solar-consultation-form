@@ -45,7 +45,7 @@ TERMS_URL = "https://www.safestreets.com/terms-conditions/"
 PRIVACY_URL = "https://www.safestreets.com/privacy-policy/"
 DO_NOT_SELL_URL = "https://www.safestreets.com/affirmation/"
 
-CONSENT_VERSION = "solar-consultation-request-v4"
+CONSENT_VERSION = "solar-consultation-request-v5"
 
 # -------------------------------------------------
 # FILE NAME CANDIDATES
@@ -72,7 +72,6 @@ BACKGROUND_CANDIDATES = [
 
 QR_CANDIDATES = [
     "safestreets_qr.png",
-    "qr.png",
 ]
 
 # -------------------------------------------------
@@ -999,9 +998,7 @@ def send_email(subject: str, body: str, pdf_path: str, bill_path: str | None):
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
         server.starttls(context=context)
         server.login(SMTP_USERNAME, SMTP_PASSWORD)
-        print(f"Sending email from {EMAIL_FROM} to {EMAIL_TO}")
         server.send_message(msg)
-        print("Email send completed successfully")
 
 def safe_delete(path):
     if path and os.path.exists(path):
@@ -1068,9 +1065,9 @@ def api_utilities():
 
 @app.route("/qr.png", methods=["GET"])
 def qr_png():
-    current_qr = qr_filename()
-    if current_qr:
-        return send_file(os.path.join(STATIC_FOLDER, current_qr), mimetype="image/png")
+    qr_path = os.path.join(STATIC_FOLDER, "safestreets_qr.png")
+    if os.path.exists(qr_path):
+        return send_file(qr_path, mimetype="image/png")
 
     root = request.url_root.rstrip("/") + "/"
     img = qrcode.make(root)
@@ -1096,10 +1093,12 @@ def submit():
     confirm_info = request.form.get("confirm_info") == "yes"
     confirm_consent = request.form.get("confirm_consent") == "yes"
 
-    if selected_utility and selected_utility != "OTHER":
+    if manual_utility:
+        utility_company = manual_utility
+    elif selected_utility and selected_utility != "OTHER":
         utility_company = selected_utility
     else:
-        utility_company = manual_utility
+        utility_company = ""
 
     if not all([
         customer_name, phone_number, email, street_address,
@@ -1133,7 +1132,6 @@ def submit():
             **common_template_context()
         )
 
-    base_name = clean_name(customer_name).replace(" ", "_")
     submitted_at_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     ip_address = request.headers.get("X-Forwarded-For", request.remote_addr or "")
 
@@ -1149,7 +1147,6 @@ def submit():
         "consultation_time": consultation_time,
         "submitted_at_utc": submitted_at_utc,
         "ip_address": ip_address,
-        "base_name": base_name,
         "confirm_info": confirm_info,
         "confirm_consent": confirm_consent,
     }
@@ -1166,7 +1163,7 @@ def submit():
         electric_bill = request.files.get("electric_bill")
         if electric_bill and electric_bill.filename:
             extension = os.path.splitext(electric_bill.filename)[1]
-            bill_filename = secure_filename(f"{base_name}_electric_bill{extension}")
+            bill_filename = secure_filename(f"{clean_name(customer_name)}_electric_bill{extension}")
             bill_path = os.path.join(TEMP_FOLDER, bill_filename)
             electric_bill.save(bill_path)
 
@@ -1198,7 +1195,6 @@ def submit():
         if SEND_EMAIL and DELETE_LOCAL_FILES_AFTER_EMAIL and email_sent:
             safe_delete(pdf_path)
             safe_delete(bill_path)
-            print("Temp files deleted after successful email send")
 
     return render_template_string(
         SUCCESS_HTML,
