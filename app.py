@@ -78,9 +78,13 @@ TERMS_URL = "https://www.safestreets.com/terms-conditions/"
 PRIVACY_URL = "https://www.safestreets.com/privacy-policy/"
 DO_NOT_SELL_URL = "https://www.safestreets.com/affirmation/"
 
-CONSENT_VERSION = "solar-consultation-request-v9"
+CONSENT_VERSION = "solar-consultation-request-v11"
 
 YOUTUBE_VIDEO_ID = "u14P_Kytz10"
+
+# Address autocomplete tuning
+ADDRESS_ALLOWED_RESULT_TYPES = {"building", "street", "amenity"}
+ADDRESS_LOCATION_RADIUS_METERS = 25000
 
 # -------------------------------------------------
 # FILE NAME CANDIDATES
@@ -382,13 +386,16 @@ def fetch_geoapify_suggestions(
 
     params = {
         "text": search_text,
-        "limit": 5,
-        "filter": "countrycode:us",
+        "limit": 8,
+        "format": "json",
         "apiKey": GEOAPIFY_API_KEY,
     }
 
     if lat is not None and lon is not None:
+        params["filter"] = f"circle:{lon},{lat},{ADDRESS_LOCATION_RADIUS_METERS}"
         params["bias"] = f"proximity:{lon},{lat}"
+    else:
+        params["filter"] = "countrycode:us"
 
     url = "https://api.geoapify.com/v1/geocode/autocomplete?" + urllib.parse.urlencode(params)
 
@@ -399,41 +406,48 @@ def fetch_geoapify_suggestions(
         print(f"Geoapify autocomplete request failed: {e}")
         return []
 
+    results = payload.get("results", [])
     suggestions = []
     seen = set()
 
-    for feature in payload.get("features", []):
-        props = feature.get("properties", {})
+    for item in results:
+        result_type = (item.get("result_type") or "").strip().lower()
+
+        if result_type not in ADDRESS_ALLOWED_RESULT_TYPES:
+            continue
 
         state_val = normalize_state_code(
-            props.get("state_code") or props.get("state") or ""
+            item.get("state_code") or item.get("state") or ""
         )
-        postcode = normalize_zip(props.get("postcode", ""))
+        postcode = normalize_zip(item.get("postcode", ""))
 
         city = (
-            props.get("city")
-            or props.get("town")
-            or props.get("village")
-            or props.get("suburb")
+            item.get("city")
+            or item.get("town")
+            or item.get("village")
+            or item.get("suburb")
             or ""
         ).strip()
 
         address_line1 = (
-            props.get("address_line1")
+            item.get("address_line1")
             or " ".join(
                 part for part in [
-                    str(props.get("housenumber", "")).strip(),
-                    str(props.get("street", "")).strip()
+                    str(item.get("housenumber", "")).strip(),
+                    str(item.get("street", "")).strip()
                 ] if part
             ).strip()
         )
 
         if not address_line1:
-            address_line1 = props.get("formatted", "").strip()
+            continue
 
-        formatted = props.get("formatted", "").strip()
+        formatted = item.get("formatted", "").strip()
         if not formatted:
             formatted = ", ".join(part for part in [address_line1, city, state_val, postcode] if part)
+
+        if state_code and state_val and state_val != state_code:
+            continue
 
         key = (address_line1.lower(), state_val, postcode)
         if key in seen:
@@ -446,9 +460,18 @@ def fetch_geoapify_suggestions(
             "state_code": state_val,
             "zip_code": postcode,
             "display_text": formatted,
+            "result_type": result_type,
+            "distance": item.get("distance"),
         })
 
-    return suggestions
+    suggestions.sort(
+        key=lambda x: (
+            x["distance"] is None,
+            x["distance"] if x["distance"] is not None else 999999
+        )
+    )
+
+    return suggestions[:5]
 
 # -------------------------------------------------
 # STYLES
@@ -744,6 +767,31 @@ BASE_STYLES = """
         position: relative;
     }
 
+    .address-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 10px;
+        align-items: start;
+    }
+
+    .location-btn {
+        margin-top: 8px;
+        width: auto;
+        min-width: 140px;
+        padding: 13px 14px;
+        font-size: 14px;
+        background: #eef3f9;
+        color: var(--ss-blue);
+        border: 1px solid var(--ss-border);
+        white-space: nowrap;
+    }
+
+    .location-status {
+        margin-top: 6px;
+        font-size: 13px;
+        color: var(--ss-muted);
+    }
+
     .autocomplete-list {
         position: absolute;
         top: 100%;
@@ -833,8 +881,13 @@ BASE_STYLES = """
 
         .grid-2,
         .grid-3,
-        .intro-buttons {
+        .intro-buttons,
+        .address-row {
             grid-template-columns: 1fr;
+        }
+
+        .location-btn {
+            width: 100%;
         }
     }
 </style>
@@ -966,14 +1019,18 @@ FORM_HTML = """
                         </div>
                         <div class="field-wrap">
                             <label>Street Address</label>
-                            <input
-                                type="text"
-                                name="street_address"
-                                id="street_address"
-                                value="{{ prefill.street_address }}"
-                                autocomplete="off"
-                                required
-                            >
+                            <div class="address-row">
+                                <input
+                                    type="text"
+                                    name="street_address"
+                                    id="street_address"
+                                    value="{{ prefill.street_address }}"
+                                    autocomplete="off"
+                                    required
+                                >
+                                <button type="button" id="share_location_btn" class="location-btn">Share Location</button>
+                            </div>
+                            <div id="location_status" class="location-status"></div>
                             <div id="address_suggestions" class="autocomplete-list"></div>
                             <p class="small">
                                 Start typing to see suggestions, or type the full address manually if you prefer.
@@ -1061,34 +1118,14 @@ FORM_HTML = """
         const stateSelect = document.getElementById('state');
         const zipInput = document.getElementById('zip_code');
         const addressSuggestions = document.getElementById('address_suggestions');
+        const shareLocationBtn = document.getElementById('share_location_btn');
+        const locationStatus = document.getElementById('location_status');
 
         let addressDebounce = null;
         let browserLocation = {
             lat: null,
             lon: null
         };
-
-        function requestBrowserLocation() {
-            if (!navigator.geolocation) {
-                return;
-            }
-
-            navigator.geolocation.getCurrentPosition(
-                function(position) {
-                    browserLocation.lat = position.coords.latitude;
-                    browserLocation.lon = position.coords.longitude;
-                },
-                function() {
-                    browserLocation.lat = null;
-                    browserLocation.lon = null;
-                },
-                {
-                    enableHighAccuracy: false,
-                    timeout: 5000,
-                    maximumAge: 600000
-                }
-            );
-        }
 
         function clearAddressSuggestions() {
             addressSuggestions.innerHTML = '';
@@ -1133,6 +1170,47 @@ FORM_HTML = """
             });
 
             addressSuggestions.style.display = 'block';
+        }
+
+        function setLocationStatus(message) {
+            locationStatus.textContent = message || '';
+        }
+
+        function requestBrowserLocationOnDemand() {
+            if (!navigator.geolocation) {
+                setLocationStatus('Location sharing is not supported on this device.');
+                return;
+            }
+
+            setLocationStatus('Requesting location...');
+            shareLocationBtn.disabled = true;
+            shareLocationBtn.textContent = 'Requesting...';
+
+            navigator.geolocation.getCurrentPosition(
+                function(position) {
+                    browserLocation.lat = position.coords.latitude;
+                    browserLocation.lon = position.coords.longitude;
+
+                    setLocationStatus('Location shared. Nearby addresses will be suggested first.');
+                    shareLocationBtn.textContent = 'Location Shared';
+
+                    if (streetInput.value.trim().length >= 2) {
+                        fetchAddressSuggestions();
+                    }
+                },
+                function() {
+                    browserLocation.lat = null;
+                    browserLocation.lon = null;
+                    shareLocationBtn.disabled = false;
+                    shareLocationBtn.textContent = 'Share Location';
+                    setLocationStatus('Location was not shared. You can still type the address manually.');
+                },
+                {
+                    enableHighAccuracy: false,
+                    timeout: 6000,
+                    maximumAge: 600000
+                }
+            );
         }
 
         async function fetchAddressSuggestions() {
@@ -1195,6 +1273,8 @@ FORM_HTML = """
             setTimeout(clearAddressSuggestions, 180);
         });
 
+        shareLocationBtn.addEventListener('click', requestBrowserLocationOnDemand);
+
         async function loadUtilities() {
             const zip = zipInput.value.trim();
             const state = stateSelect.value.trim();
@@ -1229,7 +1309,6 @@ FORM_HTML = """
 
         window.addEventListener('load', function() {
             loadUtilities();
-            requestBrowserLocation();
         });
 
         zipInput.addEventListener('input', function() {
