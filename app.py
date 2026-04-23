@@ -45,7 +45,7 @@ TERMS_URL = "https://www.safestreets.com/terms-conditions/"
 PRIVACY_URL = "https://www.safestreets.com/privacy-policy/"
 DO_NOT_SELL_URL = "https://www.safestreets.com/affirmation/"
 
-CONSENT_VERSION = "solar-consultation-request-v6"
+CONSENT_VERSION = "solar-consultation-request-v7"
 
 # YouTube video:
 # https://www.youtube.com/watch?v=u14P_Kytz10
@@ -1209,6 +1209,13 @@ def not_interested():
 @app.route("/healthz", methods=["GET"])
 def healthz():
     return "ok", 200
+
+@app.route("/warm", methods=["GET", "HEAD"])
+def warm():
+    return "", 204, {
+        "Cache-Control": "no-store, max-age=0",
+        "X-Warm-Ping": "ok"
+    }
 
 @app.route("/api/utilities", methods=["GET"])
 def api_utilities():

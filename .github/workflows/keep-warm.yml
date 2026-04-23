@@ -1,0 +1,26 @@
+name: Keep Render Warm
+
+on:
+  schedule:
+    - cron: "2,16,30,44,58 8-23 * * *"
+      timezone: "America/New_York"
+    - cron: "0 0 * * *"
+      timezone: "America/New_York"
+  workflow_dispatch:
+
+concurrency:
+  group: keep-render-warm
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Ping Render warm route
+        run: |
+          curl --fail --silent --show-error \
+            --location \
+            --user-agent "GitHubActions-KeepWarm/1.0" \
+            https://solar-consultation-form.onrender.com/warm \
+            --output /dev/null
