@@ -81,7 +81,7 @@ DO_NOT_SELL_URL = "https://www.safestreets.com/affirmation/"
 CONSENT_VERSION = "solar-consultation-request-v12"
 
 # Update this if you change the YouTube video later
-YOUTUBE_VIDEO_ID = "G4ILf5eQFK0"
+YOUTUBE_VIDEO_ID = "-UFG7x8aRe4"
 
 # Address autocomplete tuning
 ADDRESS_ALLOWED_RESULT_TYPES = {"building", "street", "amenity"}
