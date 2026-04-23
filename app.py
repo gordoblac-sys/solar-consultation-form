@@ -78,10 +78,10 @@ TERMS_URL = "https://www.safestreets.com/terms-conditions/"
 PRIVACY_URL = "https://www.safestreets.com/privacy-policy/"
 DO_NOT_SELL_URL = "https://www.safestreets.com/affirmation/"
 
-CONSENT_VERSION = "solar-consultation-request-v11"
+CONSENT_VERSION = "solar-consultation-request-v12"
 
-# Change this to your working YouTube video ID
-YOUTUBE_VIDEO_ID = "JcNX88VFo6Q"
+# Update this if you change the YouTube video later
+YOUTUBE_VIDEO_ID = "G4ILf5eQFK0"
 
 # Address autocomplete tuning
 ADDRESS_ALLOWED_RESULT_TYPES = {"building", "street", "amenity"}
@@ -223,14 +223,16 @@ def normalize_state_code(value: str) -> str:
 # CONSENT TEXT
 # -------------------------------------------------
 COMBINED_CONSENT_TEXT = (
-    "By checking the boxes below and submitting this form, I agree to receive recurring "
-    "automated marketing and other calls, texts, and prerecorded messages from SafeStreets' solar partners "
-    "at the number I provide, even if I am on a Do Not Call list. I authorize SafeStreets' solar partners, "
-    "their partners, and/or affiliates to contact me by telephone calls and/or text messages (SMS), using "
-    "auto-dialing technology or otherwise, for advertising and marketing purposes. Consent is not required "
-    "to make a purchase. Message and data rates may apply. Reply STOP to opt out of texts or HELP for help. "
-    "By checking the boxes and submitting, I also acknowledge and agree to the Terms of Use, Privacy Policy, and "
-    "Do Not Sell My Personal Information notice linked below."
+    "By checking the boxes below and submitting this form, I provide my electronic signature "
+    "and expressly consent to receive recurring automated marketing and other calls, texts, "
+    "and prerecorded messages from SafeStreets LLC, its partners, and/or affiliates at the "
+    "number I provide, even if I am on a federal or state Do Not Call list. I further authorize "
+    "SafeStreets LLC to share my information with its partners and/or affiliates for the purpose "
+    "of contacting me by telephone calls and/or text messages (SMS), using an automatic telephone "
+    "dialing system or other automated technology, for advertising and marketing purposes. Consent "
+    "is not required as a condition of purchase. Message and data rates may apply. Reply STOP to opt "
+    "out of texts or HELP for help. By checking the boxes and submitting, I also acknowledge and agree "
+    "to the Terms of Use, Privacy Policy, and Do Not Sell My Personal Information notice linked below."
 )
 
 # -------------------------------------------------
@@ -690,12 +692,19 @@ BASE_STYLES = """
         background: #000;
     }
 
-    .video-frame iframe {
+    .video-frame iframe,
+    .video-frame #yt-player {
         position: absolute;
         inset: 0;
         width: 100%;
         height: 100%;
         border: 0;
+    }
+
+    .sound-btn {
+        margin-top: 14px;
+        background: linear-gradient(135deg, #0b2f5b 0%, #184d8a 100%);
+        color: white;
     }
 
     .intro-buttons {
@@ -928,14 +937,10 @@ INTRO_HTML = """
 
             <div class="video-shell">
                 <div class="video-frame">
-                    <iframe
-                        src="https://www.youtube.com/embed/{{ youtube_video_id }}?playsinline=1&rel=0&modestbranding=1&autoplay=1&mute=1"
-                        title="SafeStreets Solar Intro Video"
-                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                        referrerpolicy="strict-origin-when-cross-origin"
-                        allowfullscreen>
-                    </iframe>
+                    <div id="yt-player"></div>
                 </div>
+
+                <button type="button" id="play-sound-btn" class="sound-btn">Play With Sound</button>
 
                 <div class="intro-buttons">
                     <a href="/form" class="intro-btn btn-green">Interested</a>
@@ -944,6 +949,50 @@ INTRO_HTML = """
             </div>
         </div>
     </div>
+
+    <script src="https://www.youtube.com/iframe_api"></script>
+    <script>
+        let player;
+
+        function onYouTubeIframeAPIReady() {
+            player = new YT.Player('yt-player', {
+                videoId: '{{ youtube_video_id }}',
+                playerVars: {
+                    autoplay: 1,
+                    controls: 1,
+                    rel: 0,
+                    playsinline: 1,
+                    modestbranding: 1
+                },
+                events: {
+                    onReady: onPlayerReady
+                }
+            });
+        }
+
+        function onPlayerReady(event) {
+            try {
+                event.target.mute();
+                event.target.setVolume(100);
+                event.target.playVideo();
+            } catch (e) {
+                console.log('Autoplay was limited by the browser.', e);
+            }
+        }
+
+        document.addEventListener('click', function(e) {
+            if (e.target && e.target.id === 'play-sound-btn' && player) {
+                try {
+                    player.unMute();
+                    player.setVolume(100);
+                    player.playVideo();
+                    e.target.textContent = 'Sound On';
+                } catch (err) {
+                    console.log('Could not start sound.', err);
+                }
+            }
+        });
+    </script>
 </body>
 </html>
 """
@@ -1522,7 +1571,7 @@ def build_pdf(data: dict, pdf_path: str):
     y -= 20
 
     pdf.setFont("Helvetica", 9)
-    pdf.drawString(left_margin, y, f"[{'X' if data.get('confirm_info') else ' '}] By checking this box, I confirm that the information entered above is accurate to the best of my knowledge.")
+    pdf.drawString(left_margin, y, f"[{'X' if data.get('confirm_info') else ' '}] By checking this box, I confirm that the information I entered above is accurate to the best of my knowledge.")
     y -= 18
     pdf.drawString(left_margin, y, f"[{'X' if data.get('confirm_consent') else ' '}] By checking this box, I acknowledge and agree to the electronic consent disclosure above and authorize submission of this Solar Consultation Request.")
     y -= 24
