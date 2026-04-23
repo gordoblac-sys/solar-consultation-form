@@ -10,6 +10,7 @@ import urllib.request
 from io import BytesIO
 from datetime import datetime, timezone
 from email.message import EmailMessage
+from typing import Optional
 
 from flask import Flask, request, render_template_string, send_file, jsonify, url_for
 from reportlab.pdfgen import canvas
@@ -77,7 +78,7 @@ TERMS_URL = "https://www.safestreets.com/terms-conditions/"
 PRIVACY_URL = "https://www.safestreets.com/privacy-policy/"
 DO_NOT_SELL_URL = "https://www.safestreets.com/affirmation/"
 
-CONSENT_VERSION = "solar-consultation-request-v8"
+CONSENT_VERSION = "solar-consultation-request-v9"
 
 YOUTUBE_VIDEO_ID = "u14P_Kytz10"
 
@@ -186,6 +187,12 @@ STATES = [
 
 STATE_NAME_TO_CODE = {
     name.lower(): code
+    for code, name in STATES
+    if code
+}
+
+STATE_CODE_TO_NAME = {
+    code: name
     for code, name in STATES
     if code
 }
@@ -335,18 +342,53 @@ load_utility_data()
 # -------------------------------------------------
 # GEOAPIFY ADDRESS AUTOCOMPLETE
 # -------------------------------------------------
-def fetch_geoapify_suggestions(query: str):
+def safe_float(value) -> Optional[float]:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+def build_geoapify_search_text(query: str, state_code: str = "", zip_code: str = "") -> str:
     query = (query or "").strip()
-    if len(query) < 3 or not GEOAPIFY_API_KEY:
+    state_code = (state_code or "").strip().upper()
+    zip_code = normalize_zip(zip_code)
+
+    parts = [query]
+
+    if state_code:
+        state_name = STATE_CODE_TO_NAME.get(state_code, state_code)
+        parts.append(state_name)
+
+    if zip_code:
+        parts.append(zip_code)
+
+    return ", ".join(part for part in parts if part)
+
+def fetch_geoapify_suggestions(
+    query: str,
+    state_code: str = "",
+    zip_code: str = "",
+    lat: Optional[float] = None,
+    lon: Optional[float] = None
+):
+    query = (query or "").strip()
+    state_code = (state_code or "").strip().upper()
+    zip_code = normalize_zip(zip_code)
+
+    if len(query) < 2 or not GEOAPIFY_API_KEY:
         return []
 
+    search_text = build_geoapify_search_text(query, state_code, zip_code)
+
     params = {
-        "text": query,
+        "text": search_text,
         "limit": 5,
         "filter": "countrycode:us",
-        "bias": "countrycode:us",
         "apiKey": GEOAPIFY_API_KEY,
     }
+
+    if lat is not None and lon is not None:
+        params["bias"] = f"proximity:{lon},{lat}"
 
     url = "https://api.geoapify.com/v1/geocode/autocomplete?" + urllib.parse.urlencode(params)
 
@@ -363,11 +405,11 @@ def fetch_geoapify_suggestions(query: str):
     for feature in payload.get("features", []):
         props = feature.get("properties", {})
 
-        state_code = normalize_state_code(
+        state_val = normalize_state_code(
             props.get("state_code") or props.get("state") or ""
         )
-
         postcode = normalize_zip(props.get("postcode", ""))
+
         city = (
             props.get("city")
             or props.get("town")
@@ -380,8 +422,8 @@ def fetch_geoapify_suggestions(query: str):
             props.get("address_line1")
             or " ".join(
                 part for part in [
-                    props.get("housenumber", "").strip(),
-                    props.get("street", "").strip()
+                    str(props.get("housenumber", "")).strip(),
+                    str(props.get("street", "")).strip()
                 ] if part
             ).strip()
         )
@@ -391,9 +433,9 @@ def fetch_geoapify_suggestions(query: str):
 
         formatted = props.get("formatted", "").strip()
         if not formatted:
-            formatted = ", ".join(part for part in [address_line1, city, state_code, postcode] if part)
+            formatted = ", ".join(part for part in [address_line1, city, state_val, postcode] if part)
 
-        key = (address_line1.lower(), state_code, postcode)
+        key = (address_line1.lower(), state_val, postcode)
         if key in seen:
             continue
         seen.add(key)
@@ -401,7 +443,7 @@ def fetch_geoapify_suggestions(query: str):
         suggestions.append({
             "street_address": address_line1,
             "city": city,
-            "state_code": state_code,
+            "state_code": state_val,
             "zip_code": postcode,
             "display_text": formatted,
         })
@@ -934,7 +976,7 @@ FORM_HTML = """
                             >
                             <div id="address_suggestions" class="autocomplete-list"></div>
                             <p class="small">
-                                Start typing your address and choose the correct match from the list.
+                                Start typing to see suggestions, or type the full address manually if you prefer.
                             </p>
                         </div>
                     </div>
@@ -1015,13 +1057,38 @@ FORM_HTML = """
 
     <script>
         const GEOAPIFY_ENABLED = {{ 'true' if geoapify_enabled else 'false' }};
-
-        let addressDebounce = null;
-
         const streetInput = document.getElementById('street_address');
         const stateSelect = document.getElementById('state');
         const zipInput = document.getElementById('zip_code');
         const addressSuggestions = document.getElementById('address_suggestions');
+
+        let addressDebounce = null;
+        let browserLocation = {
+            lat: null,
+            lon: null
+        };
+
+        function requestBrowserLocation() {
+            if (!navigator.geolocation) {
+                return;
+            }
+
+            navigator.geolocation.getCurrentPosition(
+                function(position) {
+                    browserLocation.lat = position.coords.latitude;
+                    browserLocation.lon = position.coords.longitude;
+                },
+                function() {
+                    browserLocation.lat = null;
+                    browserLocation.lon = null;
+                },
+                {
+                    enableHighAccuracy: false,
+                    timeout: 5000,
+                    maximumAge: 600000
+                }
+            );
+        }
 
         function clearAddressSuggestions() {
             addressSuggestions.innerHTML = '';
@@ -1075,14 +1142,32 @@ FORM_HTML = """
             }
 
             const query = streetInput.value.trim();
+            const state = stateSelect.value.trim();
+            const zip = zipInput.value.trim();
 
-            if (query.length < 3) {
+            if (query.length < 2) {
                 clearAddressSuggestions();
                 return;
             }
 
+            const params = new URLSearchParams();
+            params.set('q', query);
+
+            if (state) {
+                params.set('state', state);
+            }
+
+            if (zip.length === 5) {
+                params.set('zip_code', zip);
+            }
+
+            if (browserLocation.lat !== null && browserLocation.lon !== null) {
+                params.set('lat', browserLocation.lat);
+                params.set('lon', browserLocation.lon);
+            }
+
             try {
-                const response = await fetch(`/api/address-autocomplete?q=${encodeURIComponent(query)}`);
+                const response = await fetch(`/api/address-autocomplete?${params.toString()}`);
                 if (!response.ok) {
                     clearAddressSuggestions();
                     return;
@@ -1101,7 +1186,7 @@ FORM_HTML = """
         });
 
         streetInput.addEventListener('focus', function() {
-            if (streetInput.value.trim().length >= 3) {
+            if (streetInput.value.trim().length >= 2) {
                 fetchAddressSuggestions();
             }
         });
@@ -1111,8 +1196,8 @@ FORM_HTML = """
         });
 
         async function loadUtilities() {
-            const zip = document.getElementById('zip_code').value.trim();
-            const state = document.getElementById('state').value.trim();
+            const zip = zipInput.value.trim();
+            const state = stateSelect.value.trim();
             const select = document.getElementById('utility_company');
 
             if (!state || zip.length !== 5) {
@@ -1144,23 +1229,30 @@ FORM_HTML = """
 
         window.addEventListener('load', function() {
             loadUtilities();
+            requestBrowserLocation();
         });
 
-        document.getElementById('zip_code').addEventListener('input', function() {
+        zipInput.addEventListener('input', function() {
             const zip = this.value.replace(/\\D/g, '').slice(0, 5);
             this.value = zip;
 
-            const state = document.getElementById('state').value.trim();
+            const state = stateSelect.value.trim();
             if (state && zip.length === 5) {
                 loadUtilities();
             }
         });
 
-        document.getElementById('zip_code').addEventListener('blur', loadUtilities);
-        document.getElementById('state').addEventListener('change', function() {
-            const zip = document.getElementById('zip_code').value.trim();
+        zipInput.addEventListener('blur', loadUtilities);
+
+        stateSelect.addEventListener('change', function() {
+            const zip = zipInput.value.trim();
+
             if (this.value.trim() && zip.length === 5) {
                 loadUtilities();
+            }
+
+            if (streetInput.value.trim().length >= 2) {
+                fetchAddressSuggestions();
             }
         });
     </script>
@@ -1389,7 +1481,7 @@ def build_pdf(data: dict, pdf_path: str):
 
     pdf.save()
 
-def send_email(subject: str, body: str, pdf_path: str, bill_path: str | None):
+def send_email(subject: str, body: str, pdf_path: str, bill_path: Optional[str]):
     if not os.path.exists(pdf_path):
         raise FileNotFoundError(f"PDF was not created: {pdf_path}")
 
@@ -1515,14 +1607,25 @@ def api_utilities():
 @app.route("/api/address-autocomplete", methods=["GET"])
 def api_address_autocomplete():
     query = (request.args.get("q") or "").strip()
+    state = (request.args.get("state") or "").strip()
+    zip_code = (request.args.get("zip_code") or "").strip()
+    lat = safe_float(request.args.get("lat"))
+    lon = safe_float(request.args.get("lon"))
 
-    if len(query) < 3:
+    if len(query) < 2:
         return jsonify({"suggestions": []})
 
     if not GEOAPIFY_API_KEY:
         return jsonify({"suggestions": []})
 
-    suggestions = fetch_geoapify_suggestions(query)
+    suggestions = fetch_geoapify_suggestions(
+        query=query,
+        state_code=state,
+        zip_code=zip_code,
+        lat=lat,
+        lon=lon
+    )
+
     return jsonify({"suggestions": suggestions})
 
 @app.route("/qr.png", methods=["GET"])
