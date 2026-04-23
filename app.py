@@ -80,7 +80,8 @@ DO_NOT_SELL_URL = "https://www.safestreets.com/affirmation/"
 
 CONSENT_VERSION = "solar-consultation-request-v11"
 
-YOUTUBE_VIDEO_ID = "u14P_Kytz10"
+# Change this to your working YouTube video ID
+YOUTUBE_VIDEO_ID = "JcNX88VFo6Q"
 
 # Address autocomplete tuning
 ADDRESS_ALLOWED_RESULT_TYPES = {"building", "street", "amenity"}
@@ -259,7 +260,8 @@ def load_utility_data():
     csv_files = []
     if os.path.exists(DATA_FOLDER):
         for name in os.listdir(DATA_FOLDER):
-            if name.lower().endswith(".csv"):
+            lower_name = name.lower()
+            if lower_name.endswith(".csv") and "2024" in lower_name:
                 csv_files.append(os.path.join(DATA_FOLDER, name))
 
     print("---- Utility CSV Load Start ----")
@@ -688,8 +690,7 @@ BASE_STYLES = """
         background: #000;
     }
 
-    .video-frame iframe,
-    .video-frame #yt-player {
+    .video-frame iframe {
         position: absolute;
         inset: 0;
         width: 100%;
@@ -927,7 +928,13 @@ INTRO_HTML = """
 
             <div class="video-shell">
                 <div class="video-frame">
-                    <div id="yt-player"></div>
+                    <iframe
+                        src="https://www.youtube.com/embed/{{ youtube_video_id }}?playsinline=1&rel=0&modestbranding=1&autoplay=1&mute=1"
+                        title="SafeStreets Solar Intro Video"
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                        referrerpolicy="strict-origin-when-cross-origin"
+                        allowfullscreen>
+                    </iframe>
                 </div>
 
                 <div class="intro-buttons">
@@ -937,35 +944,6 @@ INTRO_HTML = """
             </div>
         </div>
     </div>
-
-    <script src="https://www.youtube.com/iframe_api"></script>
-    <script>
-        let player;
-
-        function onYouTubeIframeAPIReady() {
-            player = new YT.Player('yt-player', {
-                videoId: '{{ youtube_video_id }}',
-                playerVars: {
-                    autoplay: 1,
-                    controls: 1,
-                    rel: 0,
-                    playsinline: 1
-                },
-                events: {
-                    onReady: onPlayerReady
-                }
-            });
-        }
-
-        function onPlayerReady(event) {
-            try {
-                event.target.mute();
-                event.target.playVideo();
-            } catch (e) {
-                console.log('Autoplay was limited by the browser.', e);
-            }
-        }
-    </script>
 </body>
 </html>
 """
