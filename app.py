@@ -2,8 +2,11 @@ import os
 import re
 import ssl
 import csv
+import json
 import mimetypes
 import smtplib
+import urllib.parse
+import urllib.request
 from io import BytesIO
 from datetime import datetime, timezone
 from email.message import EmailMessage
@@ -23,10 +26,37 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_FOLDER = os.path.join(BASE_DIR, "static")
 DATA_FOLDER = os.path.join(BASE_DIR, "data")
 TEMP_FOLDER = os.path.join(BASE_DIR, "temp_files")
+ENV_FILE = os.path.join(BASE_DIR, ".env")
 
 os.makedirs(STATIC_FOLDER, exist_ok=True)
 os.makedirs(DATA_FOLDER, exist_ok=True)
 os.makedirs(TEMP_FOLDER, exist_ok=True)
+
+# -------------------------------------------------
+# LOCAL .ENV LOADER
+# -------------------------------------------------
+def load_local_env():
+    if not os.path.exists(ENV_FILE):
+        return
+
+    try:
+        with open(ENV_FILE, "r", encoding="utf-8") as f:
+            for raw_line in f:
+                line = raw_line.strip()
+
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except Exception as e:
+        print(f"Could not load .env file: {e}")
+
+load_local_env()
 
 # -------------------------------------------------
 # SETTINGS
@@ -41,14 +71,14 @@ SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 EMAIL_FROM = os.environ.get("EMAIL_FROM", SMTP_USERNAME)
 EMAIL_TO = os.environ.get("EMAIL_TO", "solarleadership@safestreets.com")
 
+GEOAPIFY_API_KEY = os.environ.get("GEOAPIFY_API_KEY", "").strip()
+
 TERMS_URL = "https://www.safestreets.com/terms-conditions/"
 PRIVACY_URL = "https://www.safestreets.com/privacy-policy/"
 DO_NOT_SELL_URL = "https://www.safestreets.com/affirmation/"
 
-CONSENT_VERSION = "solar-consultation-request-v7"
+CONSENT_VERSION = "solar-consultation-request-v8"
 
-# YouTube video:
-# https://www.youtube.com/watch?v=u14P_Kytz10
 YOUTUBE_VIDEO_ID = "u14P_Kytz10"
 
 # -------------------------------------------------
@@ -131,6 +161,7 @@ def common_template_context():
         "qr_exists": qr_exists(),
         "qr_file": qr_filename(),
         "youtube_video_id": YOUTUBE_VIDEO_ID,
+        "geoapify_enabled": bool(GEOAPIFY_API_KEY),
     }
 
 # -------------------------------------------------
@@ -153,12 +184,28 @@ STATES = [
     ("WI", "Wisconsin"), ("WY", "Wyoming")
 ]
 
+STATE_NAME_TO_CODE = {
+    name.lower(): code
+    for code, name in STATES
+    if code
+}
+
 def render_state_options(selected_state=""):
     html = []
     for code, name in STATES:
         selected = "selected" if code == selected_state else ""
         html.append(f'<option value="{code}" {selected}>{name}</option>')
     return "".join(html)
+
+def normalize_state_code(value: str) -> str:
+    value = (value or "").strip()
+    if not value:
+        return ""
+
+    if len(value) == 2:
+        return value.upper()
+
+    return STATE_NAME_TO_CODE.get(value.lower(), "")
 
 # -------------------------------------------------
 # CONSENT TEXT
@@ -284,6 +331,82 @@ def get_utility_options(zip_code: str, state: str):
     return []
 
 load_utility_data()
+
+# -------------------------------------------------
+# GEOAPIFY ADDRESS AUTOCOMPLETE
+# -------------------------------------------------
+def fetch_geoapify_suggestions(query: str):
+    query = (query or "").strip()
+    if len(query) < 3 or not GEOAPIFY_API_KEY:
+        return []
+
+    params = {
+        "text": query,
+        "limit": 5,
+        "filter": "countrycode:us",
+        "bias": "countrycode:us",
+        "apiKey": GEOAPIFY_API_KEY,
+    }
+
+    url = "https://api.geoapify.com/v1/geocode/autocomplete?" + urllib.parse.urlencode(params)
+
+    try:
+        with urllib.request.urlopen(url, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception as e:
+        print(f"Geoapify autocomplete request failed: {e}")
+        return []
+
+    suggestions = []
+    seen = set()
+
+    for feature in payload.get("features", []):
+        props = feature.get("properties", {})
+
+        state_code = normalize_state_code(
+            props.get("state_code") or props.get("state") or ""
+        )
+
+        postcode = normalize_zip(props.get("postcode", ""))
+        city = (
+            props.get("city")
+            or props.get("town")
+            or props.get("village")
+            or props.get("suburb")
+            or ""
+        ).strip()
+
+        address_line1 = (
+            props.get("address_line1")
+            or " ".join(
+                part for part in [
+                    props.get("housenumber", "").strip(),
+                    props.get("street", "").strip()
+                ] if part
+            ).strip()
+        )
+
+        if not address_line1:
+            address_line1 = props.get("formatted", "").strip()
+
+        formatted = props.get("formatted", "").strip()
+        if not formatted:
+            formatted = ", ".join(part for part in [address_line1, city, state_code, postcode] if part)
+
+        key = (address_line1.lower(), state_code, postcode)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        suggestions.append({
+            "street_address": address_line1,
+            "city": city,
+            "state_code": state_code,
+            "zip_code": postcode,
+            "display_text": formatted,
+        })
+
+    return suggestions
 
 # -------------------------------------------------
 # STYLES
@@ -575,6 +698,48 @@ BASE_STYLES = """
         gap: 16px;
     }
 
+    .field-wrap {
+        position: relative;
+    }
+
+    .autocomplete-list {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        background: white;
+        border: 1px solid var(--ss-border);
+        border-top: none;
+        border-radius: 0 0 12px 12px;
+        box-shadow: 0 12px 25px rgba(11, 47, 91, 0.12);
+        z-index: 50;
+        overflow: hidden;
+        display: none;
+    }
+
+    .autocomplete-item {
+        padding: 12px 14px;
+        cursor: pointer;
+        border-top: 1px solid #eef4fb;
+        background: white;
+        font-size: 14px;
+        line-height: 1.4;
+    }
+
+    .autocomplete-item:hover {
+        background: #f5f9ff;
+    }
+
+    .autocomplete-primary {
+        font-weight: 700;
+        color: var(--ss-blue);
+    }
+
+    .autocomplete-secondary {
+        color: var(--ss-muted);
+        margin-top: 2px;
+    }
+
     label {
         display: block;
         margin-top: 14px;
@@ -757,9 +922,20 @@ FORM_HTML = """
                             <label>Email</label>
                             <input type="email" name="email" value="{{ prefill.email }}" required>
                         </div>
-                        <div>
+                        <div class="field-wrap">
                             <label>Street Address</label>
-                            <input type="text" name="street_address" value="{{ prefill.street_address }}" required>
+                            <input
+                                type="text"
+                                name="street_address"
+                                id="street_address"
+                                value="{{ prefill.street_address }}"
+                                autocomplete="off"
+                                required
+                            >
+                            <div id="address_suggestions" class="autocomplete-list"></div>
+                            <p class="small">
+                                Start typing your address and choose the correct match from the list.
+                            </p>
                         </div>
                     </div>
 
@@ -838,6 +1014,102 @@ FORM_HTML = """
     </div>
 
     <script>
+        const GEOAPIFY_ENABLED = {{ 'true' if geoapify_enabled else 'false' }};
+
+        let addressDebounce = null;
+
+        const streetInput = document.getElementById('street_address');
+        const stateSelect = document.getElementById('state');
+        const zipInput = document.getElementById('zip_code');
+        const addressSuggestions = document.getElementById('address_suggestions');
+
+        function clearAddressSuggestions() {
+            addressSuggestions.innerHTML = '';
+            addressSuggestions.style.display = 'none';
+        }
+
+        function renderAddressSuggestions(items) {
+            if (!items || items.length === 0) {
+                clearAddressSuggestions();
+                return;
+            }
+
+            addressSuggestions.innerHTML = '';
+
+            items.forEach(function(item) {
+                const row = document.createElement('div');
+                row.className = 'autocomplete-item';
+                row.innerHTML = `
+                    <div class="autocomplete-primary">${item.street_address || ''}</div>
+                    <div class="autocomplete-secondary">${item.display_text || ''}</div>
+                `;
+
+                row.addEventListener('click', function() {
+                    streetInput.value = item.street_address || '';
+
+                    if (item.state_code) {
+                        stateSelect.value = item.state_code;
+                    }
+
+                    if (item.zip_code) {
+                        zipInput.value = item.zip_code;
+                    }
+
+                    clearAddressSuggestions();
+
+                    if (stateSelect.value && zipInput.value.length === 5) {
+                        loadUtilities();
+                    }
+                });
+
+                addressSuggestions.appendChild(row);
+            });
+
+            addressSuggestions.style.display = 'block';
+        }
+
+        async function fetchAddressSuggestions() {
+            if (!GEOAPIFY_ENABLED) {
+                clearAddressSuggestions();
+                return;
+            }
+
+            const query = streetInput.value.trim();
+
+            if (query.length < 3) {
+                clearAddressSuggestions();
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/address-autocomplete?q=${encodeURIComponent(query)}`);
+                if (!response.ok) {
+                    clearAddressSuggestions();
+                    return;
+                }
+
+                const data = await response.json();
+                renderAddressSuggestions(data.suggestions || []);
+            } catch (error) {
+                clearAddressSuggestions();
+            }
+        }
+
+        streetInput.addEventListener('input', function() {
+            clearTimeout(addressDebounce);
+            addressDebounce = setTimeout(fetchAddressSuggestions, 300);
+        });
+
+        streetInput.addEventListener('focus', function() {
+            if (streetInput.value.trim().length >= 3) {
+                fetchAddressSuggestions();
+            }
+        });
+
+        streetInput.addEventListener('blur', function() {
+            setTimeout(clearAddressSuggestions, 180);
+        });
+
         async function loadUtilities() {
             const zip = document.getElementById('zip_code').value.trim();
             const state = document.getElementById('state').value.trim();
@@ -1239,6 +1511,19 @@ def api_utilities():
         "count": len(utilities),
         "utilities": utilities
     })
+
+@app.route("/api/address-autocomplete", methods=["GET"])
+def api_address_autocomplete():
+    query = (request.args.get("q") or "").strip()
+
+    if len(query) < 3:
+        return jsonify({"suggestions": []})
+
+    if not GEOAPIFY_API_KEY:
+        return jsonify({"suggestions": []})
+
+    suggestions = fetch_geoapify_suggestions(query)
+    return jsonify({"suggestions": suggestions})
 
 @app.route("/qr.png", methods=["GET"])
 def qr_png():
